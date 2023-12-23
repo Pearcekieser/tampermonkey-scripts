@@ -7,8 +7,8 @@
 // @match        https://*.console.aws.amazon.com/cloudwatch/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=amazon.com
 // @require      https://cdn.jsdelivr.net/npm/dayjs@1/dayjs.min.js
-// @updateURL    https://github.com/Pearcekieser/tampermonkey-scripts/raw/main/aws/cw-insights/cw-lambda-deep-dive.js
-// @downloadURL  https://github.com/Pearcekieser/tampermonkey-scripts/raw/main/aws/cw-insights/cw-lambda-deep-dive.js
+// @updateURL    https://github.com/Pearcekieser/tampermonkey-scripts/raw/main/aws/cw-insights/cw-lambda-deep-dive.user.js
+// @downloadURL  https://github.com/Pearcekieser/tampermonkey-scripts/raw/main/aws/cw-insights/cw-lambda-deep-dive.user.js
 // @grant        none
 // ==/UserScript==
 
