@@ -1,12 +1,12 @@
 // ==UserScript==
 // @name         CW Insights - Lambda Deep Dive
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      1.01
 // @description  Add a link to any UUID in cloudwatch logs to make a new query that filters on that uuid
 // @author       Pearce Kieser
 // @match        https://*.console.aws.amazon.com/cloudwatch/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=amazon.com
-// @require      https://cdn.jsdelivr.net/npm/dayjs@1/dayjs.min.js
+// @require      https://cdn.jsdelivr.net/npm/date-fns@3.6.0/cdn.min.js
 // @updateURL    https://github.com/Pearcekieser/tampermonkey-scripts/raw/main/aws/cw-insights/cw-lambda-deep-dive.user.js
 // @downloadURL  https://github.com/Pearcekieser/tampermonkey-scripts/raw/main/aws/cw-insights/cw-lambda-deep-dive.user.js
 // @grant        none
@@ -32,151 +32,160 @@
 
 
 (function() {
-  'use strict';
+    'use strict';
 
-  const uuidRegex = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
-  const timestampRegex = /(\d{4}-[01]\d-[0-3]\d[T ][0-2]\d:[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-][0-2]\d:[0-5]\d))/;
+    const uuidRegex = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+    const timestampRegex = /(\d{4}-[01]\d-[0-3]\d[T ][0-2]\d:[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-][0-2]\d:[0-5]\d))/;
 
-  function parseInsightsUrl(url) {
-      // Decodes the URL components
-      const decode = (s) => decodeURIComponent(s.replace(/\*/g, '%').replace(/\$/g, '%'));
+    function parseInsightsUrl(url) {
+        // Decodes the URL components
+        const decode = (s) => decodeURIComponent(s.replace(/\*/g, '%').replace(/\$/g, '%'));
 
-      // Extracts the region
-      const regionMatch = url.match(/region=([^&]+)#/);
-      if (!regionMatch) {
-          throw new Error('Invalid URL: Unable to find the region');
-      }
-      const region = regionMatch[1];
+        // Extracts the region
+        const regionMatch = url.match(/region=([^&]+)#/);
+        if (!regionMatch) {
+            throw new Error('Invalid URL: Unable to find the region');
+        }
+        const region = regionMatch[1];
 
-      // Handles the part after the hash
-      const hashComponents = url.split('#');
-      if (hashComponents.length < 2) {
-          throw new Error('Invalid URL: Unable to find the hash components');
-      }
-      // Decoding the fragment
-      const hashPartDecoded = decode(hashComponents[1]);
+        // Handles the part after the hash
+        const hashComponents = url.split('#');
+        if (hashComponents.length < 2) {
+            throw new Error('Invalid URL: Unable to find the hash components');
+        }
+        // Decoding the fragment
+        const hashPartDecoded = decode(hashComponents[1]);
 
-      // Extracts the queryDetail
-      const queryDetailMatch = hashPartDecoded.match(/queryDetail=([^)]+)/);
-      if (!queryDetailMatch) {
-          throw new Error('Invalid URL: Unable to find the queryDetail');
-      }
-      const queryDetail = queryDetailMatch[1];
+        // Extracts the queryDetail
+        const queryDetailMatch = hashPartDecoded.match(/queryDetail=([^)]+)/);
+        if (!queryDetailMatch) {
+            throw new Error('Invalid URL: Unable to find the queryDetail');
+        }
+        const queryDetail = queryDetailMatch[1];
 
-      // Parsing individual components from the queryDetail
-      const endMatch = queryDetail.match(/end~'([^~]+)~/);
-      const startMatch = queryDetail.match(/start~'([^~]+)~/);
-      const timeTypeMatch = queryDetail.match(/timeType~'([^~]+)~/);
-      const tzMatch = queryDetail.match(/tz~'([^~]+)~/);
-      const editorStringMatch = queryDetail.match(/editorString~'([^~]+)~/);
-      const queryIdMatch = queryDetail.match(/queryId~'([^~]+)~/);
-      const sourceMatch = queryDetail.match(/source~\(([^)]+)/);
+        // Parsing individual components from the queryDetail
 
-      const sourceArray = sourceMatch ? sourceMatch[1].match(/~'([^~']+)/g)
+        // For absolute times, there's a s
+        const endMatch = queryDetail.match(/end~'?([^~]+)~/);
+        const startMatch = queryDetail.match(/start~'?([^~]+)~/);
+        const timeTypeMatch = queryDetail.match(/timeType~'([^~]+)~/);
+        const tzMatch = queryDetail.match(/tz~'([^~]+)~/);
+        const unitMatch = queryDetail.match(/unit~'([^~]+)~/);
+        const editorStringMatch = queryDetail.match(/editorString~'([^~]+)~/);
+        const queryIdMatch = queryDetail.match(/queryId~'([^~]+)~/);
+        const sourceMatch = queryDetail.match(/source~\(([^)]+)/);
+
+        const sourceArray = sourceMatch ? sourceMatch[1].match(/~'([^~']+)/g)
           .map(match => match.substring(2)) : null;
 
-      return {
-          region: region,
-          end: endMatch ? decode(endMatch[1]) : null,
-          start: startMatch ? decode(startMatch[1]) : null,
-          timeType: timeTypeMatch ? decode(timeTypeMatch[1]) : null,
-          timeZone: tzMatch ? decode(tzMatch[1]) : null,
-          editorString: editorStringMatch ? decode(editorStringMatch[1]) : null,
-          queryId: queryIdMatch ? decode(queryIdMatch[1]) : null,
-          sourceGroups: sourceArray ? sourceArray : null
-      };
-  }
+        return {
+            region: region,
+            end: endMatch ? decode(endMatch[1]) : null,
+            start: startMatch ? decode(startMatch[1]) : null,
+            timeType: timeTypeMatch ? decode(timeTypeMatch[1]) : null,
+            timeZone: tzMatch ? decode(tzMatch[1]) : null,
+            unitMatch: unitMatch ? decode(unitMatch[1]) : null,
+            editorString: editorStringMatch ? decode(editorStringMatch[1]) : null,
+            queryId: queryIdMatch ? decode(queryIdMatch[1]) : null,
+            sourceGroups: sourceArray ? sourceArray : null
+        };
+    }
 
-  function buildInsightsUrl(data) {
-      // Encodes components to make them URL safe
-      const encode = (s) => encodeURIComponent(s).replace(/%/g, '*').replace(/\$/g, '$');
+    function buildInsightsUrl(data) {
+        // Encodes components to make them URL safe
+        const encode = (s) => encodeURIComponent(s).replace(/%/g, '*').replace(/\$/g, '$');
 
-      // Constructs the base URL with the region
-      let url = `https://${data.region}.console.aws.amazon.com/cloudwatch/home?region=${encode(data.region)}#logsV2:logs-insights`;
+        // Constructs the base URL with the region
+        let url = `https://${data.region}.console.aws.amazon.com/cloudwatch/home?region=${encode(data.region)}#logsV2:logs-insights`;
 
-      // Encodes and assembles the details after the hash
-      let hashDetails = `$3FqueryDetail$3D~(`;
-      if (data.end) hashDetails += `end~'${encode(data.end)}~`;
-      if (data.start) hashDetails += `start~'${encode(data.start)}~`;
-      if (data.timeType) hashDetails += `timeType~'${encode(data.timeType)}~`;
-      if (data.timeZone) hashDetails += `tz~'${encode(data.timeZone)}~`;
-      if (data.editorString) hashDetails += `editorString~'${encode(data.editorString)}~`;
-      if (data.queryId) hashDetails += `queryId~'${encode(data.queryId)}~`;
+        // Encodes and assembles the details after the hash
+        let hashDetails = `$3FqueryDetail$3D~(`;
+        if (data.end) hashDetails += `end~${data.timeType === 'ABSOLUTE' ? "'" : ""}${encode(data.end)}~`;
+        if (data.start) hashDetails += `start~${data.timeType === 'ABSOLUTE' ? "'" : ""}${encode(data.start)}~`;
+        if (data.timeType) hashDetails += `timeType~'${encode(data.timeType)}~`;
+        if (data.timeZone) hashDetails += `tz~'${encode(data.timeZone)}~`;
+        if (data.unitMatch) hashDetails += `unit~'${encode(data.unitMatch)}~`
+        if (data.editorString) hashDetails += `editorString~'${encode(data.editorString)}~`;
+        if (data.queryId) hashDetails += `queryId~'${encode(data.queryId)}~`;
 
-      // Handles the source group
-      if (data.sourceGroups && data.sourceGroups.length > 0) {
-          const encodedSources = data.sourceGroups.map(src => `~'${encode(src)}`);
-          hashDetails += `source~(${encodedSources.join('')})`;
-      }
+        // Handles the source group
+        if (data.sourceGroups && data.sourceGroups.length > 0) {
+            const encodedSources = data.sourceGroups.map(src => `~'${encode(src)}`);
+            hashDetails += `source~(${encodedSources.join('')})`;
+        }
 
-      hashDetails += ')'; // Closing the double parentheses
+        hashDetails += ')'; // Closing the double parentheses
 
-      // Appends the encoded details after the hash
-      url += hashDetails;
+        // Appends the encoded details after the hash
+        url += hashDetails;
 
-      return url;
-  }
+        return url;
+    }
 
+    function generateDesiredQuery(uuid) {
+        return `fields @timestamp, @message\n| sort @timestamp desc\n| filter @message like '${uuid}'\n`
+    }
 
-  function generateDesiredQuery(uuid) {
-      return `fields @timestamp, @message\n| sort @timestamp desc\n| filter @message like '${uuid}'\n`
-  }
+    function replaceUUIDs() {
+        const urlInfo = parseInsightsUrl(window.location.href);
+        console.log("Parsed insights url info: ", urlInfo)
 
-  function replaceUUIDs() {
-      const urlInfo = parseInsightsUrl(window.location.href);
+        const iframe = document.querySelector('#microConsole-Logs');
+        if (iframe) {
+            const insideIframe = iframe.contentDocument || iframe.contentWindow.document;
+            const targetNode = insideIframe.querySelector('tbody.logs-table__body');
+            if (targetNode) {
+                targetNode.querySelectorAll('tr').forEach(tr => {
 
-      const newUrl = buildInsightsUrl(urlInfo);
+                    // Get the HTML content of the row
+                    let html = tr.innerHTML;
 
-      const iframe = document.querySelector('#microConsole-Logs');
-      if (iframe) {
-          const insideIframe = iframe.contentDocument || iframe.contentWindow.document;
-          const targetNode = insideIframe.querySelector('tbody.logs-table__body');
-          if (targetNode) {
-              targetNode.querySelectorAll('tr').forEach(tr => {
+                    // Replace UUIDs not already part of an <a> tag
+                    html = html.replace(uuidRegex, function(match) {
+                        // Check if the UUID is already wrapped with an <a> tag
+                        const alreadyReplacedRegex = new RegExp(`<a[^>]*>${match}</a>`);
+                        const isQueryIdRegex = new RegExp(`~queryId~'${match}`)
+                        if (alreadyReplacedRegex.test(html)) {
+                            // If it's already replaced, return the match without modification
+                            return match;
+                        } else if (isQueryIdRegex.test(html)) {
+                            // If it's a queryId, don't replace the queryId
+                            return match;
+                        } else {
+                            let timestamp = null;
+                            const timestampMatch = html.match(timestampRegex);
+                            console.log("Timestamp match: ", timestampMatch);
+                            if (timestampMatch) {
+                                timestamp = new Date(timestampMatch[1])
+                            }
+                            const newQuery = generateDesiredQuery(match);
+                            urlInfo.editorString = newQuery;
+                            if (timestamp) {
+                                console.log("Timestamp: ", timestamp)
+                                urlInfo.start = dateFns.subMinutes(timestamp, 15).toISOString();
+                                urlInfo.end = dateFns.addMinutes(timestamp, 15).toISOString();
+                                urlInfo.timeType = 'ABSOLUTE'
+                                urlInfo.unitMatch = null
+                            }
+                            console.log("Building new insights url with: ", urlInfo)
+                            const newUrl = buildInsightsUrl(urlInfo);
 
-                  // Get the HTML content of the row
-                  let html = tr.innerHTML;
+                            // If it's not replaced, return the new <a> tag
+                            const newTag = `<a href="${newUrl}" target="_blank">${match}</a>`;
+                            console.log("New Tag: ", newTag)
+                            return newTag;
+                        }
+                    });
 
-                  // Replace UUIDs not already part of an <a> tag
-                  html = html.replace(uuidRegex, function(match) {
-                      // Check if the UUID is already wrapped with an <a> tag
-                      const alreadyReplacedRegex = new RegExp(`<a[^>]*>${match}</a>`);
-                      if (alreadyReplacedRegex.test(html)) {
-                          // If it's already replaced, return the match without modification
-                          return match;
-                      } else {
-                          console.log(html);
-                          let timestamp = null;
-                          const timestampMatch = html.match(timestampRegex);
-                          console.log(timestampMatch);
-                          if (timestampMatch) {
-                              timestamp = dayjs(timestampMatch[1])
-                          }
-                          const newQuery = generateDesiredQuery(match);
-                          urlInfo.editorString = newQuery;
-                          if (timestamp) {
-                              console.log(timestamp.toISOString())
-                              console.log(timestamp.add(15, 'minute').toISOString())
-                              console.log(timestamp.subtract(15, 'minute').toISOString())
-                              urlInfo.start = timestamp.subtract(15, 'minute').toISOString();
-                              urlInfo.end = timestamp.add(15, 'minute').toISOString();
-                          }
-                          const newUrl = buildInsightsUrl(urlInfo);
+                    // Update the HTML content of the row
+                    if (tr.innerHTML !== html) {
+                        tr.innerHTML = html;
+                    }
+                });
+            }
+        }
+    }
 
-                          // If it's not replaced, return the new <a> tag
-                          return `<a href="${newUrl}" target="_blank">${match}</a>`;
-                      }
-                  });
-
-                  // Update the HTML content of the row
-                  if (tr.innerHTML !== html) {
-                      tr.innerHTML = html;
-                  }
-              });
-          }
-      }
-  }
-
-  // Run replaceUUIDs every 1 second
-  setInterval(replaceUUIDs, 500);
+    // Run replaceUUIDs every 1 second
+    setInterval(replaceUUIDs, 1000);
 })();
